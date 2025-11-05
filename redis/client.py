@@ -659,15 +659,44 @@ class Redis(RedisModuleCommands, CoreCommands, SentinelCommands):
         command_name = args[0]
         conn = self.connection or pool.get_connection()
 
+        # Start timing for observability
+        start_time = time.monotonic()
+
         if self._single_connection_client:
             self.single_connection_lock.acquire()
         try:
-            return conn.retry.call_with_retry(
+            result = conn.retry.call_with_retry(
                 lambda: self._send_command_parse_response(
                     conn, command_name, *args, **options
                 ),
                 lambda _: self._close_connection(conn),
             )
+
+            # Record successful operation
+            from redis.observability.recorder import record_operation_duration
+            record_operation_duration(
+                command_name=command_name,
+                duration_seconds=time.monotonic() - start_time,
+                server_address=getattr(conn, 'host', None),
+                server_port=getattr(conn, 'port', None),
+                db_namespace=str(getattr(conn, 'db', 0)),
+                error=None,
+            )
+
+            return result
+
+        except Exception as e:
+            # Record failed operation
+            from redis.observability.recorder import record_operation_duration
+            record_operation_duration(
+                command_name=command_name,
+                duration_seconds=time.monotonic() - start_time,
+                server_address=getattr(conn, 'host', None),
+                server_port=getattr(conn, 'port', None),
+                db_namespace=str(getattr(conn, 'db', 0)),
+                error=e,
+            )
+            raise
 
         finally:
             if conn and conn.should_reconnect():
@@ -677,6 +706,8 @@ class Redis(RedisModuleCommands, CoreCommands, SentinelCommands):
                 self.single_connection_lock.release()
             if not self.connection:
                 pool.release(conn)
+
+
 
     def parse_response(self, connection, command_name, **options):
         """Parses a response from the Redis server"""

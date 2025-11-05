@@ -2019,11 +2019,55 @@ class ConnectionPool:
 
         kwargs = dict(self.connection_kwargs)
 
-        if self.cache is not None:
-            return CacheProxyConnection(
-                self.connection_class(**kwargs), self.cache, self._lock
+        # Start timing for observability
+        start_time = time.monotonic()
+
+        try:
+            if self.cache is not None:
+                connection = CacheProxyConnection(
+                    self.connection_class(**kwargs), self.cache, self._lock
+                )
+            else:
+                connection = self.connection_class(**kwargs)
+
+            # Record connection creation time
+            from redis.observability.recorder import record_connection_create_time
+            record_connection_create_time(
+                pool_name=self._get_pool_name(),
+                duration_seconds=time.monotonic() - start_time,
             )
-        return self.connection_class(**kwargs)
+
+            return connection
+        except Exception:
+            # Record metric even on failure
+            from redis.observability.recorder import record_connection_create_time
+            record_connection_create_time(
+                pool_name=self._get_pool_name(),
+                duration_seconds=time.monotonic() - start_time,
+            )
+            raise
+
+
+
+    def _get_pool_name(self) -> str:
+        """Generate pool name for metrics."""
+        kwargs = self.connection_kwargs
+
+        # Extract connection details
+        host = kwargs.get("host", "localhost")
+        port = kwargs.get("port", 6379)
+        db = kwargs.get("db", 0)
+
+        # Check if it's a Unix socket
+        unix_socket_path = kwargs.get("unix_socket_path")
+        if unix_socket_path:
+            return f"redis+unix://{unix_socket_path}/{db}"
+
+        # Check if SSL is enabled
+        ssl = kwargs.get("ssl", False)
+        scheme = "rediss" if ssl else "redis"
+
+        return f"{scheme}://{host}:{port}/{db}"
 
     def release(self, connection: "Connection") -> None:
         "Releases the connection back to the pool"
@@ -2378,6 +2422,9 @@ class BlockingConnectionPool(ConnectionPool):
 
     def make_connection(self):
         "Make a fresh connection."
+        # Start timing for observability
+        start_time = time.monotonic()
+
         try:
             if self._in_maintenance:
                 self._lock.acquire()
@@ -2392,7 +2439,23 @@ class BlockingConnectionPool(ConnectionPool):
             else:
                 connection = self.connection_class(**self.connection_kwargs)
                 self._connections.append(connection)
+
+            # Record connection creation time
+            from redis.observability.recorder import record_connection_create_time
+            record_connection_create_time(
+                pool_name=self._get_pool_name(),
+                duration_seconds=time.monotonic() - start_time,
+            )
+
             return connection
+        except Exception:
+            # Record metric even on failure
+            from redis.observability.recorder import record_connection_create_time
+            record_connection_create_time(
+                pool_name=self._get_pool_name(),
+                duration_seconds=time.monotonic() - start_time,
+            )
+            raise
         finally:
             if self._locked:
                 try:
