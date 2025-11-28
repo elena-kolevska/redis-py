@@ -20,7 +20,12 @@ import time
 
 import os
 import redis
-from redis.observability import get_observability_instance, OTelConfig
+from redis.observability import (
+    get_observability_instance,
+    OTelConfig,
+    MetricsConfig,
+    MetricGroup,
+)
 
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
@@ -69,7 +74,7 @@ def setup_external_otel_sdk(exporter_type="otlp", log_file=None):
    # Create a metric reader that will periodically export metrics
    reader = PeriodicExportingMetricReader(
        exporter=exporter,
-       export_interval_millis=3000  # Export every 3 seconds
+       export_interval_millis=1000  # Export every 3 seconds
    )
 
    # Initialize the MeterProvider with resource and reader
@@ -92,7 +97,6 @@ def setup_external_otel_sdk(exporter_type="otlp", log_file=None):
 # meter_provider = setup_external_otel_sdk(exporter_type="file")
 
 # Option 3: File exporter (debugging) - writes to file
-# meter_provider = setup_external_otel_sdk(exporter_type="file", log_file="redis_metrics.log")
 meter_provider = setup_external_otel_sdk()
 
 # STEP_START basic_config
@@ -102,7 +106,25 @@ otel = get_observability_instance()
 # Initialize observability ONCE at application startup
 # Note: We already set up the global MeterProvider above via setup_external_otel_sdk()
 otel.init(OTelConfig(
-    enable_metrics=True,
+    metrics=MetricsConfig(
+        enabled=True,
+        # Optional: Configure which metric groups to collect
+        enabled_metric_groups=[
+            MetricGroup.COMMAND,           # Command execution metrics
+            MetricGroup.CONNECTION_BASIC,  # Connection pool metrics
+            MetricGroup.RESILIENCY,        # Error and retry metrics
+        ],
+        # Optional: Filter which commands to track
+        # include_commands=["GET", "SET", "HGET", "HSET"],  # Only track these commands
+        # exclude_commands=["DEBUG", "CONFIG"],              # Don't track these commands
+        # Optional: Reduce cardinality for high-volume scenarios
+        # hide_pubsub_channel_names=True,  # Omit channel names from Pub/Sub metrics
+        # hide_stream_names=True,          # Omit stream names from stream metrics
+        # Optional: Configure histogram aggregation
+        # hist_aggregation=HistogramAggregation.EXPLICIT_BUCKET_HISTOGRAM,
+        # Optional: Custom bucket boundaries (in seconds)
+        # buckets_operation_duration=[0.001, 0.01, 0.1, 1.0, 10.0],
+    )
 ))
 
 print("✅ Observability initialized - using global MeterProvider")
@@ -121,13 +143,14 @@ r = redis.Redis(
 # STEP_START basic_operations
 # Perform some Redis operations - metrics will be automatically collected
 
-for i in range(15):
+for i in range(50):
     # pipe = r.pipeline()
     random_number = random.randint(1, 50)
     for j in range(random_number):
         r.set(f"user:1001-{i}", "Jane Smith")
         r.set(f"user:1002-{i}", "Bob Johnson")
         r.get(f"user:1001-{i}")
+
     # results = pipe.execute()
     time.sleep(0.5)
 

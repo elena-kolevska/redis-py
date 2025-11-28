@@ -5,121 +5,154 @@ This module handles configuration for OTel observability features,
 including parsing environment variables and validating settings.
 """
 
-import os
-from typing import Dict, List, Optional, Union
+from enum import Enum
+from typing import List, Optional
 
 
-class OTelConfig:
+class MetricGroup(str, Enum):
+    """Metric groups that can be enabled/disabled."""
+    RESILIENCY = "resiliency"
+    CONNECTION_BASIC = "connection-basic"
+    CONNECTION_ADVANCED = "connection-advanced"
+    COMMAND = "command"
+    CSC = "client-side-caching"
+    STREAMING = "streaming"
+    PUBSUB = "pubsub"
+
+
+class HistogramAggregation(str, Enum):
+    """Histogram aggregation modes."""
+    EXPLICIT_BUCKET_HISTOGRAM = "explicit_bucket_histogram"
+    BASE2_EXPONENTIAL_BUCKET_HISTOGRAM = "base2_exponential_bucket_histogram"
+
+
+class MetricsConfig:
     """
-    Configuration for OpenTelemetry observability in redis-py.
-    
-    This class manages all OTel-related settings including metrics, traces (future),
-    and logs (future). Configuration can be provided via constructor parameters or
-    environment variables (OTEL_* spec).
-    
-    Constructor parameters take precedence over environment variables.
-    
-    Args:
-        enable_metrics: Enable/disable metrics emission (default: False)
-        enable_traces: Enable/disable tracing (default: False) - Phase 2
-        enable_logs: Enable/disable log export (default: False) - Phase 3
-        metrics_sample_percentage: Percentage of commands to sample (default: 100.0, range: 0.0-100.0)
-        include_commands: Explicit allowlist of commands to track
-        exclude_commands: Blocklist of commands to track
+    Configuration for Redis metrics collection.
 
-    Note:
-        Redis-py uses the global MeterProvider set by your application.
-        Set it up before initializing observability:
-
-            from opentelemetry import metrics
-            from opentelemetry.sdk.metrics import MeterProvider
-            from opentelemetry.sdk.metrics._internal.view import View
-            from opentelemetry.sdk.metrics._internal.aggregation import ExplicitBucketHistogramAggregation
-
-            # Configure histogram bucket boundaries via Views
-            views = [
-                View(
-                    instrument_name="db.client.operation.duration",
-                    aggregation=ExplicitBucketHistogramAggregation(
-                        boundaries=[0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
-                                    0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5]
-                    ),
-                ),
-                # Add more views for other histograms...
-            ]
-
-            provider = MeterProvider(views=views, metric_readers=[reader])
-            metrics.set_meter_provider(provider)
-
-            # Then initialize redis-py observability
-            from redis.observability import get_observability_instance, OTelConfig
-            otel = get_observability_instance()
-            otel.init(OTelConfig(enable_metrics=True))
+    This class groups all metrics-related configuration options together.
     """
-    
+    DEFAULT_METRIC_GROUPS = [
+        MetricGroup.CONNECTION_BASIC,
+        MetricGroup.RESILIENCY,
+    ]
+
+    # Default bucket boundaries (in seconds)
+    DEFAULT_BUCKETS_OPERATION_DURATION = [
+        0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
+        0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5
+    ]
+
+    DEFAULT_BUCKETS_CONNECTION_CREATE_TIME = [
+        0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
+        0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
+    ]
+
+    DEFAULT_BUCKETS_CONNECTION_WAIT_TIME = [
+        0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
+        0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
+    ]
+
+    DEFAULT_BUCKETS_CONNECTION_USE_TIME = [
+        0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
+        0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
+    ]
+
+    DEFAULT_BUCKETS_STREAM_PROCESSING_DURATION = [
+        0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
+        0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10
+    ]
 
     def __init__(
         self,
         # Core enablement
-        enable_metrics: bool = False,
-        enable_traces: bool = False,
-        enable_logs: bool = False,
-        # Metrics-specific
-        metrics_sample_percentage: float = 100.0,
-        # Redis-specific telemetry controls
+        enabled: bool = False,
+        enabled_metric_groups: Optional[List[MetricGroup]] = None,
+        # Command filtering
         include_commands: Optional[List[str]] = None,
         exclude_commands: Optional[List[str]] = None,
+        # Cardinality reduction
+        hide_pubsub_channel_names: bool = False,
+        hide_stream_names: bool = False,
+        # Histogram configuration
+        hist_aggregation: str = HistogramAggregation.EXPLICIT_BUCKET_HISTOGRAM,
+        buckets_operation_duration: Optional[List[float]] = None,
+        buckets_stream_processing_duration: Optional[List[float]] = None,
+        buckets_connection_create_time: Optional[List[float]] = None,
+        buckets_connection_wait_time: Optional[List[float]] = None,
+        buckets_connection_use_time: Optional[List[float]] = None,
     ):
+        """
+        Initialize metrics configuration.
+
+        Args:
+            enabled: Enable/disable metrics emission (default: False)
+            enabled_metric_groups: Metric groups to register (default: ["command", "connection-basic", "resiliency"])
+            include_commands: Command allow-list for metrics (e.g., ["GET", "SET"])
+            exclude_commands: Command deny-list for metrics
+            hide_pubsub_channel_names: If True, omit channel label from Pub/Sub metrics (default: False)
+            hide_stream_names: If True, omit stream label from stream metrics (default: False)
+            hist_aggregation: Histogram aggregation mode (default: explicit_bucket_histogram)
+            buckets_operation_duration: Explicit buckets (seconds) for db.client.operation.duration
+            buckets_stream_processing_duration: Explicit buckets (seconds) for redis.client.stream.processing_duration
+            buckets_connection_create_time: Buckets for db.client.connection.create_time
+            buckets_connection_wait_time: Buckets for db.client.connection.wait_time
+            buckets_connection_use_time: Buckets for db.client.connection.use_time
+        """
         # Core enablement
-        self.enable_metrics = enable_metrics
-        self.enable_traces = enable_traces
-        self.enable_logs = enable_logs
+        self.enabled = enabled
+        self.enabled_metric_groups = set(enabled_metric_groups) if enabled_metric_groups else self.DEFAULT_METRIC_GROUPS
 
-        # Metrics configuration
-        if not 0.0 <= metrics_sample_percentage <= 100.0:
-            raise ValueError(
-                f"metrics_sample_percentage must be between 0.0 and 100.0, "
-                f"got {metrics_sample_percentage}"
-            )
-        self.metrics_sample_percentage = metrics_sample_percentage
+        # Command filtering
+        self.include_commands = set(cmd.upper() for cmd in include_commands) if include_commands else None
+        self.exclude_commands = set(cmd.upper() for cmd in exclude_commands) if exclude_commands else set()
 
-        # Redis-specific controls
-        self.include_commands = set(include_commands) if include_commands else None
-        self.exclude_commands = set(exclude_commands) if exclude_commands else set()
+        # Cardinality reduction
+        self.hide_pubsub_channel_names = hide_pubsub_channel_names
+        self.hide_stream_names = hide_stream_names
+
+        # Histogram configuration
+        self.hist_aggregation = hist_aggregation
+        self.buckets_operation_duration = buckets_operation_duration or self.DEFAULT_BUCKETS_OPERATION_DURATION
+        self.buckets_stream_processing_duration = buckets_stream_processing_duration or self.DEFAULT_BUCKETS_STREAM_PROCESSING_DURATION
+        self.buckets_connection_create_time = buckets_connection_create_time or self.DEFAULT_BUCKETS_CONNECTION_CREATE_TIME
+        self.buckets_connection_wait_time = buckets_connection_wait_time or self.DEFAULT_BUCKETS_CONNECTION_WAIT_TIME
+        self.buckets_connection_use_time = buckets_connection_use_time or self.DEFAULT_BUCKETS_CONNECTION_USE_TIME
 
         # Validate configuration
         self._validate()
-    
+
     def _validate(self) -> None:
         """Validate configuration settings."""
-        # No validation needed - we use global MeterProvider set by the application
-        pass
-    
-    def is_enabled(self) -> bool:
-        """Check if any observability feature is enabled."""
-        return self.enable_metrics or self.enable_traces or self.enable_logs
-    
-    def set_sample_percentage(self, percentage: float) -> None:
-        """
-        Set the metrics sample percentage at runtime.
+        # Validate metric groups
+        valid_groups = {MetricGroup.COMMAND, MetricGroup.CONNECTION_BASIC, MetricGroup.RESILIENCY}
+        for group in self.enabled_metric_groups:
+            if group not in valid_groups:
+                raise ValueError(f"Invalid metric group: {group}. Valid groups: {valid_groups}")
 
-        This allows dynamic adjustment of sampling rate for high-throughput deployments.
+        # Validate histogram aggregation
+        valid_aggs = {HistogramAggregation.EXPLICIT_BUCKET_HISTOGRAM, HistogramAggregation.BASE2_EXPONENTIAL_BUCKET_HISTOGRAM}
+        if self.hist_aggregation not in valid_aggs:
+            raise ValueError(f"Invalid histogram aggregation: {self.hist_aggregation}. Valid: {valid_aggs}")
 
-        Args:
-            percentage: Percentage of commands to sample (0.0-100.0)
+        # Validate bucket boundaries (must be sorted and positive)
+        if self.hist_aggregation == HistogramAggregation.EXPLICIT_BUCKET_HISTOGRAM:
+            for name, buckets in [
+                ("buckets_operation_duration", self.buckets_operation_duration),
+                ("buckets_stream_processing_duration", self.buckets_stream_processing_duration),
+                ("buckets_connection_create_time", self.buckets_connection_create_time),
+                ("buckets_connection_wait_time", self.buckets_connection_wait_time),
+                ("buckets_connection_use_time", self.buckets_connection_use_time),
+            ]:
+                if buckets:
+                    if not all(b > 0 for b in buckets):
+                        raise ValueError(f"{name} must contain only positive values")
+                    if buckets != sorted(buckets):
+                        raise ValueError(f"{name} must be sorted in ascending order")
 
-        Raises:
-            ValueError: If percentage is not in valid range
-
-        Example:
-            >>> config.set_sample_percentage(10.0)  # Sample 10% of commands
-        """
-        if not 0.0 <= percentage <= 100.0:
-            raise ValueError(
-                f"metrics_sample_percentage must be between 0.0 and 100.0, "
-                f"got {percentage}"
-            )
-        self.metrics_sample_percentage = percentage
+    def is_metric_group_enabled(self, group: str) -> bool:
+        """Check if a specific metric group is enabled."""
+        return group in self.enabled_metric_groups
 
     def should_track_command(self, command_name: str) -> bool:
         """
@@ -139,37 +172,122 @@ class OTelConfig:
 
         # Otherwise, track all commands except those in exclude list
         return command_upper not in self.exclude_commands
-    
-    def get_endpoint_with_default_port(self) -> Optional[str]:
+
+
+class OTelConfig:
+    """
+    Configuration for OpenTelemetry observability in redis-py.
+
+    This class manages all OTel-related settings including metrics, traces (future),
+    and logs (future). Configuration is grouped by feature area.
+
+    Args:
+        metrics: MetricsConfig instance for metrics configuration (optional)
+
+    Example:
+        >>> from redis.observability import OTelConfig, MetricsConfig, MetricGroup
+        >>>
+        >>> # Simple usage - enable metrics with defaults
+        >>> config = OTelConfig(metrics=MetricsConfig(enabled=True))
+        >>>
+        >>> # Advanced usage - customize metrics
+        >>> config = OTelConfig(
+        ...     metrics=MetricsConfig(
+        ...         enabled=True,
+        ...         enabled_metric_groups=[MetricGroup.COMMAND, MetricGroup.CONNECTION_BASIC],
+        ...         include_commands=["GET", "SET"],
+        ...         buckets_operation_duration=[0.001, 0.01, 0.1, 1.0],
+        ...     )
+        ... )
+    """
+
+    def __init__(
+        self,
+        metrics: Optional[MetricsConfig] = None,
+    ):
         """
-        Get the collector endpoint with default port inferred if needed.
-        
-        Returns:
-            Endpoint with port, or None if no endpoint configured
+        Initialize OTel configuration.
+
+        Args:
+            metrics: Metrics configuration (default: disabled)
         """
-        if not self.collector_endpoint:
-            return None
-        
-        endpoint = self.collector_endpoint
-        
-        # If endpoint doesn't have a port, infer default based on protocol
-        if "://" in endpoint:
-            scheme, rest = endpoint.split("://", 1)
-            if ":" not in rest.split("/")[0]:  # No port specified
-                if self.protocol == "grpc":
-                    endpoint = f"{scheme}://{rest.split('/')[0]}:4317"
-                else:  # http/protobuf
-                    endpoint = f"{scheme}://{rest.split('/')[0]}:4318"
-                # Preserve path if any
-                if "/" in rest:
-                    endpoint += "/" + "/".join(rest.split("/")[1:])
-        
-        return endpoint
-    
+        self.metrics = metrics if metrics is not None else MetricsConfig(enabled=False)
+
+    def is_enabled(self) -> bool:
+        """Check if any observability feature is enabled."""
+        return self.metrics.enabled
+
+    # Backward compatibility properties - delegate to metrics config
+    @property
+    def enable_metrics(self) -> bool:
+        """Backward compatibility: access metrics.enable"""
+        return self.metrics.enabled
+
+    @property
+    def enabled_metric_groups(self):
+        """Backward compatibility: access metrics.enabled_metric_groups"""
+        return self.metrics.enabled_metric_groups
+
+    @property
+    def include_commands(self):
+        """Backward compatibility: access metrics.include_commands"""
+        return self.metrics.include_commands
+
+    @property
+    def exclude_commands(self):
+        """Backward compatibility: access metrics.exclude_commands"""
+        return self.metrics.exclude_commands
+
+    @property
+    def hide_pubsub_channel_names(self) -> bool:
+        """Backward compatibility: access metrics.hide_pubsub_channel_names"""
+        return self.metrics.hide_pubsub_channel_names
+
+    @property
+    def hide_stream_names(self) -> bool:
+        """Backward compatibility: access metrics.hide_stream_names"""
+        return self.metrics.hide_stream_names
+
+    @property
+    def hist_aggregation(self):
+        """Backward compatibility: access metrics.hist_aggregation"""
+        return self.metrics.hist_aggregation
+
+    @property
+    def buckets_operation_duration(self):
+        """Backward compatibility: access metrics.buckets_operation_duration"""
+        return self.metrics.buckets_operation_duration
+
+    @property
+    def buckets_stream_processing_duration(self):
+        """Backward compatibility: access metrics.buckets_stream_processing_duration"""
+        return self.metrics.buckets_stream_processing_duration
+
+    @property
+    def buckets_connection_create_time(self):
+        """Backward compatibility: access metrics.buckets_connection_create_time"""
+        return self.metrics.buckets_connection_create_time
+
+    @property
+    def buckets_connection_wait_time(self):
+        """Backward compatibility: access metrics.buckets_connection_wait_time"""
+        return self.metrics.buckets_connection_wait_time
+
+    @property
+    def buckets_connection_use_time(self):
+        """Backward compatibility: access metrics.buckets_connection_use_time"""
+        return self.metrics.buckets_connection_use_time
+
+    def is_metric_group_enabled(self, group: str) -> bool:
+        """Check if a specific metric group is enabled."""
+        return self.metrics.is_metric_group_enabled(group)
+
+    def should_track_command(self, command_name: str) -> bool:
+        """Determine if a command should be tracked based on include/exclude lists."""
+        return self.metrics.should_track_command(command_name)
+
     def __repr__(self) -> str:
         return (
-            f"OTelConfig(enable_metrics={self.enable_metrics}, "
-            f"collector_endpoint={self.collector_endpoint}, "
-            f"protocol={self.protocol})"
+            f"OTelConfig(metrics.enable={self.metrics.enabled}, "
         )
 

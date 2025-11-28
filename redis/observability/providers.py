@@ -169,28 +169,6 @@ class OTelProviderManager:
 class ObservabilityInstance:
     """
     Singleton instance for managing OpenTelemetry observability.
-
-    This class follows the singleton pattern similar to Glide's GetOtelInstance().
-    Use GetObservabilityInstance() to get the singleton instance, then call init()
-    to initialize observability.
-
-    Example:
-        >>> from redis.observability import GetObservabilityInstance, OTelConfig
-        >>>
-        >>> # Get singleton instance
-        >>> otel = GetObservabilityInstance()
-        >>>
-        >>> # Initialize once at app startup
-        >>> otel.init(OTelConfig(
-        ...     enable_metrics=True,
-        ...     collector_endpoint="http://localhost:4318/v1/metrics",
-        ...     service_name="my-app"
-        ... ))
-        >>>
-        >>> # All Redis clients now automatically collect metrics
-        >>> import redis
-        >>> r = redis.Redis(host='localhost', port=6379)
-        >>> r.set('key', 'value')  # Metrics collected automatically
     """
 
     def __init__(self):
@@ -204,7 +182,7 @@ class ObservabilityInstance:
         all Redis clients will automatically collect and export metrics without
         needing any additional configuration.
 
-        Safe to call multiple times - will shutdown previous instance before
+        Safe to call multiple times - will shut down previous instance before
         initializing a new one.
 
         Args:
@@ -212,13 +190,6 @@ class ObservabilityInstance:
 
         Returns:
             Self for method chaining
-
-        Example:
-            >>> otel = GetObservabilityInstance()
-            >>> otel.init(OTelConfig(
-            ...     enable_metrics=True,
-            ...     service_name="my-app"
-            ... ))
         """
         if self._provider_manager is not None:
             logger.warning("Observability already initialized. Shutting down previous instance.")
@@ -236,11 +207,6 @@ class ObservabilityInstance:
 
         Returns:
             True if observability is initialized and metrics are enabled
-
-        Example:
-            >>> otel = GetObservabilityInstance()
-            >>> if otel.is_enabled():
-            ...     print("Metrics are being collected")
         """
         return self._provider_manager is not None and self._provider_manager.config.is_enabled()
 
@@ -250,12 +216,6 @@ class ObservabilityInstance:
 
         Returns:
             The provider manager, or None if not initialized
-
-        Example:
-            >>> otel = GetObservabilityInstance()
-            >>> manager = otel.get_provider_manager()
-            >>> if manager is not None:
-            ...     print(f"Service name: {manager.config.service_name}")
         """
         return self._provider_manager
 
@@ -271,11 +231,6 @@ class ObservabilityInstance:
 
         Returns:
             True if shutdown was successful
-
-        Example:
-            >>> otel = GetObservabilityInstance()
-            >>> # At application shutdown
-            >>> otel.shutdown()
         """
         if self._provider_manager is None:
             logger.debug("Observability not initialized, nothing to shutdown")
@@ -299,13 +254,6 @@ class ObservabilityInstance:
 
         Returns:
             True if flush was successful
-
-        Example:
-            >>> otel = GetObservabilityInstance()
-            >>> # Execute some Redis commands
-            >>> r.set('key', 'value')
-            >>> # Force flush metrics immediately
-            >>> otel.force_flush()
         """
         if self._provider_manager is None:
             logger.debug("Observability not initialized, nothing to flush")
@@ -339,39 +287,6 @@ def get_observability_instance() -> ObservabilityInstance:
         _observability_instance = ObservabilityInstance()
 
     return _observability_instance
-
-
-# Backward compatibility functions (delegate to singleton instance)
-
-def init_observability(config: OTelConfig) -> OTelProviderManager:
-    """
-    Initialize OpenTelemetry observability (backward compatibility).
-
-    Deprecated: Use get_observability_instance().init(config) instead.
-
-    Args:
-        config: OTel configuration object
-
-    Returns:
-        The provider manager instance
-
-    Example:
-        >>> from redis.observability import init_observability, OTelConfig
-        >>>
-        >>> # Old way (still works)
-        >>> init_observability(OTelConfig(
-        ...     enable_metrics=True,
-        ...     service_name="my-app"
-        ... ))
-        >>>
-        >>> # New way (preferred)
-        >>> from redis.observability import get_observability_instance
-        >>> otel = get_observability_instance()
-        >>> otel.init(OTelConfig(enable_metrics=True))
-    """
-    otel = get_observability_instance()
-    otel.init(config)
-    return otel.get_provider_manager()
 
 
 def get_provider_manager() -> Optional[OTelProviderManager]:

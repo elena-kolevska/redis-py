@@ -38,7 +38,12 @@ Usage:
 """
 
 from redis.observability.attributes import AttributeBuilder
-from redis.observability.config import OTelConfig
+from redis.observability.config import (
+    HistogramAggregation,
+    MetricGroup,
+    MetricsConfig,
+    OTelConfig,
+)
 from redis.observability.metrics import RedisMetricsCollector
 from redis.observability.providers import (
     ObservabilityInstance,
@@ -63,11 +68,12 @@ from redis.observability.timing import (
 __all__ = [
     # Configuration
     "OTelConfig",
-    # New API (recommended)
+    "MetricsConfig",
+    "MetricGroup",
+    "HistogramAggregation",
+    # Advanced API (for more control)
     "get_observability_instance",
     "ObservabilityInstance",
-    # Old API (backward compatibility)
-    "init_observability",
     "shutdown_observability",
     "force_flush_metrics",
     "is_observability_enabled",
